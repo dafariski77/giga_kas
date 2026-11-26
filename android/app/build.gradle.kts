@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.giga_kas"
+    namespace = "com.straysheepdev.giga_kas"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -16,7 +16,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.giga_kas"
+        applicationId = "com.straysheepdev.giga_kas"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -36,6 +36,10 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+}
+
+dependencies {
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 }
 
 kotlin {
