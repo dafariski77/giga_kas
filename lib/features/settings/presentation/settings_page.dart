@@ -72,7 +72,44 @@ class SettingsPage extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: AppSpacing.xl),
-          const SectionHeader(title: 'Keamanan & Sinkronisasi'),
+          const SectionHeader(title: 'Engine AI & Penyimpanan Lokal'),
+          const SizedBox(height: AppSpacing.sm),
+          Card(
+            child: Column(
+              children: [
+                ListTile(
+                  title:
+                      Text('ONNX Runtime Offline', style: textTheme.titleSmall),
+                  subtitle: Text(
+                    'Model klasifikasi struk & proyeksi arus kas di perangkat',
+                    style: textTheme.bodySmall,
+                  ),
+                  trailing: StatusBadge(
+                    label: finance.onnxReady ? 'Aktif' : 'Standby',
+                    showDot: true,
+                    foregroundColor: finance.onnxReady
+                        ? colorScheme.primary
+                        : AppColors.warning,
+                    backgroundColor: (finance.onnxReady
+                            ? colorScheme.primaryContainer
+                            : AppColors.warning.withValues(alpha: 0.14))
+                        .withValues(alpha: 0.7),
+                  ),
+                ),
+                const Divider(),
+                ListTile(
+                  title:
+                      Text('Database SQLite Lokal', style: textTheme.titleSmall),
+                  subtitle: Text(
+                    '${finance.transactions.length} transaksi · ${finance.invoices.length} invoice · ${finance.merchantOverrides.length} koreksi AI',
+                    style: textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          const SectionHeader(title: 'Keamanan & Data'),
           const SizedBox(height: AppSpacing.sm),
           Card(
             child: Column(
@@ -88,25 +125,32 @@ class SettingsPage extends ConsumerWidget {
                       ref.read(financeProvider.notifier).toggleBiometric(v),
                 ),
                 const Divider(),
-                SwitchListTile(
-                  title: Text('Simulasi Mode Offline', style: textTheme.titleSmall),
+                ListTile(
+                  title: Text('Kunci Aplikasi', style: textTheme.titleSmall),
                   subtitle: Text(
-                    'Catat transaksi lokal lalu sinkronkan saat online',
+                    'Kembali ke layar autentikasi biometrik',
                     style: textTheme.bodySmall,
                   ),
-                  value: finance.isOfflineMode,
-                  onChanged: (v) =>
-                      ref.read(financeProvider.notifier).toggleOfflineMode(v),
+                  trailing: const Icon(Icons.lock_outline_rounded, size: 20),
+                  onTap: () => context.go(AppRoutes.auth),
                 ),
                 const Divider(),
                 ListTile(
-                  title: Text('Layar Login & Biometrik', style: textTheme.titleSmall),
+                  title: Text(
+                    'Hapus Semua Data Lokal',
+                    style:
+                        textTheme.titleSmall?.copyWith(color: AppColors.error),
+                  ),
                   subtitle: Text(
-                    'Pratinjau gerbang autentikasi Google/Apple',
+                    'Bersihkan transaksi, invoice, brankas & memori AI',
                     style: textTheme.bodySmall,
                   ),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => context.go(AppRoutes.auth),
+                  trailing: const Icon(
+                    Icons.delete_outline_rounded,
+                    size: 20,
+                    color: AppColors.error,
+                  ),
+                  onTap: () => _confirmClearData(context, ref),
                 ),
               ],
             ),
@@ -141,8 +185,41 @@ class SettingsPage extends ConsumerWidget {
               ),
             ),
           ),
+          const SizedBox(height: AppSpacing.xl),
         ],
       ),
     );
+  }
+
+  Future<void> _confirmClearData(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Hapus Semua Data Lokal?'),
+        content: const Text(
+          'Seluruh transaksi, invoice, saldo brankas, dan memori koreksi kategori di perangkat ini akan dihapus permanen.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Hapus'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await ref.read(financeProvider.notifier).clearAllLocalData();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Semua data lokal telah dibersihkan.')),
+        );
+      }
+    }
   }
 }

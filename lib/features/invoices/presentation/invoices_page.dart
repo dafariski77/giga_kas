@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/router/app_router.dart';
+import '../../../core/services/invoice_pdf_service.dart';
 import '../../../core/theme/theme.dart';
 import '../../../core/utils/currency_formatter.dart';
 import '../../../core/widgets/status_badge.dart';
@@ -103,7 +104,8 @@ class _InvoicesPageState extends ConsumerState<InvoicesPage> {
                 FilterChip(
                   label: const Text('Lunas'),
                   selected: _filter == InvoiceStatus.paid,
-                  onSelected: (_) => setState(() => _filter = InvoiceStatus.paid),
+                  onSelected: (_) =>
+                      setState(() => _filter = InvoiceStatus.paid),
                 ),
               ],
             ),
@@ -113,7 +115,7 @@ class _InvoicesPageState extends ConsumerState<InvoicesPage> {
             Card(
               child: InkWell(
                 borderRadius: AppRadius.borderMd,
-                onTap: () => _showInvoiceActions(context, ref, invoice),
+                onTap: () => _showInvoiceActions(context, invoice),
                 child: Padding(
                   padding: AppSpacing.cardPadding,
                   child: Column(
@@ -160,25 +162,26 @@ class _InvoicesPageState extends ConsumerState<InvoicesPage> {
                             Expanded(
                               child: OutlinedButton.icon(
                                 onPressed: () =>
-                                    _showInvoiceActions(context, ref, invoice),
+                                    _showInvoiceActions(context, invoice),
                                 icon: const Icon(
-                                  Icons.notifications_active_outlined,
+                                  Icons.picture_as_pdf_outlined,
                                   size: 16,
                                 ),
-                                label: const Text('Pengingat & PDF'),
+                                label: const Text('PDF & Pengingat'),
                               ),
                             ),
                             const SizedBox(width: AppSpacing.sm),
                             Expanded(
                               child: FilledButton(
-                                onPressed: () {
-                                  ref
+                                onPressed: () async {
+                                  await ref
                                       .read(financeProvider.notifier)
-                                      .markInvoicePaid(invoice.id);
+                                      .markInvoicePaid(invoice);
+                                  if (!context.mounted) return;
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
                                       content: Text(
-                                        '${invoice.invoiceNumber} ditandai lunas & masuk ke kas.',
+                                        '${invoice.invoiceNumber} lunas & otomatis masuk kas + Tax Vault.',
                                       ),
                                     ),
                                   );
@@ -197,14 +200,36 @@ class _InvoicesPageState extends ConsumerState<InvoicesPage> {
             const SizedBox(height: AppSpacing.md),
           ],
           if (filtered.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxl),
-              child: Center(
-                child: Text(
-                  'Belum ada invoice untuk filter ini.',
-                  style: textTheme.bodyMedium?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
+            Card(
+              child: Padding(
+                padding: AppSpacing.cardPadding,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      state.invoices.isEmpty
+                          ? 'Belum ada invoice dibuat'
+                          : 'Tidak ada invoice pada filter ini',
+                      style: textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      state.invoices.isEmpty
+                          ? 'Buat tagihan PDF offline untuk klien dan kirim pengingat lewat WhatsApp atau Email.'
+                          : 'Ubah filter untuk melihat daftar tagihan lainnya.',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    if (state.invoices.isEmpty) ...[
+                      const SizedBox(height: AppSpacing.md),
+                      FilledButton.icon(
+                        onPressed: () => context.push(AppRoutes.createInvoice),
+                        icon: const Icon(Icons.add_rounded, size: 18),
+                        label: const Text('Buat Invoice Pertama'),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
@@ -215,7 +240,6 @@ class _InvoicesPageState extends ConsumerState<InvoicesPage> {
 
   Future<void> _showInvoiceActions(
     BuildContext context,
-    WidgetRef ref,
     InvoiceItem invoice,
   ) async {
     final textTheme = Theme.of(context).textTheme;
@@ -245,49 +269,59 @@ class _InvoicesPageState extends ConsumerState<InvoicesPage> {
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.picture_as_pdf_outlined),
-                title: const Text('Unduh / Bagikan PDF Invoice'),
-                subtitle: const Text('Format standar siap kirim ke klien'),
-                onTap: () {
+                title: const Text('Buat & Bagikan PDF Offline'),
+                subtitle: const Text('Generate dokumen PDF langsung di HP'),
+                onTap: () async {
                   Navigator.of(sheetContext).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'PDF ${invoice.invoiceNumber} siap dibagikan.',
-                      ),
-                    ),
-                  );
+                  try {
+                    await InvoicePdfService.shareInvoicePdf(invoice);
+                  } catch (e) {
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Gagal membagikan PDF: $e')),
+                    );
+                  }
                 },
               ),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.chat_bubble_outline_rounded),
-                title: const Text('Kirim Pengingat WhatsApp'),
-                subtitle: Text('Tujuan: ${invoice.clientPhone}'),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Draft pengingat WhatsApp disiapkan untuk ${invoice.clientName}.',
-                      ),
-                    ),
-                  );
-                },
-              ),
+              if (invoice.clientPhone.trim().isNotEmpty)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.chat_bubble_outline_rounded),
+                  title: const Text('Kirim Pengingat WhatsApp'),
+                  subtitle: Text('Tujuan: ${invoice.clientPhone}'),
+                  onTap: () async {
+                    Navigator.of(sheetContext).pop();
+                    final launched =
+                        await InvoicePdfService.openWhatsAppReminder(invoice);
+                    if (!launched && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'WhatsApp tidak tersedia untuk ${invoice.clientName}.',
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                ),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.mail_outline_rounded),
                 title: const Text('Kirim Pengingat Email'),
-                subtitle: const Text('Lampirkan PDF tagihan otomatis'),
-                onTap: () {
+                subtitle: const Text('Buka aplikasi email dengan isi tagihan'),
+                onTap: () async {
                   Navigator.of(sheetContext).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Pengingat email dikirim ke ${invoice.clientName}.',
+                  final launched =
+                      await InvoicePdfService.openEmailReminder(invoice);
+                  if (!launched && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Aplikasi email tidak ditemukan untuk ${invoice.clientName}.',
+                        ),
                       ),
-                    ),
-                  );
+                    );
+                  }
                 },
               ),
               const SizedBox(height: AppSpacing.sm),

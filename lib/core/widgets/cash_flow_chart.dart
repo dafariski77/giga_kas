@@ -7,7 +7,7 @@ import '../theme/app_radius.dart';
 import '../theme/app_spacing.dart';
 import '../utils/currency_formatter.dart';
 
-/// Clean, low-clutter 6-month income vs. expense bar chart with lean-month indicator.
+/// Clean, low-clutter 6-month income vs. expense bar chart with ONNX forecast bar.
 class CashFlowChart extends StatelessWidget {
   const CashFlowChart({
     required this.points,
@@ -20,6 +20,8 @@ class CashFlowChart extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
+    final hasData = points.any((p) => p.income > 0 || p.expense > 0);
+    final projected = points.where((p) => p.isProjectedLean).firstOrNull;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -44,43 +46,63 @@ class CashFlowChart extends StatelessWidget {
           ],
         ),
         const SizedBox(height: AppSpacing.lg),
-        SizedBox(
-          height: 156,
-          width: double.infinity,
-          child: CustomPaint(
-            painter: _CashFlowPainter(
-              points: points,
-              incomeColor: colorScheme.primary,
-              expenseColor: colorScheme.outline,
-              projectedColor: colorScheme.primary.withValues(alpha: 0.35),
-              gridColor: colorScheme.outlineVariant,
-              labelStyle: textTheme.labelMedium!.copyWith(
-                fontSize: 11,
-                color: colorScheme.onSurfaceVariant,
+        if (!hasData)
+          Container(
+            height: 132,
+            width: double.infinity,
+            alignment: Alignment.center,
+            padding: AppSpacing.cardPadding,
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerLow,
+              borderRadius: AppRadius.borderSm,
+            ),
+            child: Text(
+              'Grafik arus kas & proyeksi AI akan tampil otomatis setelah transaksi pertama dicatat.',
+              style: textTheme.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+          )
+        else ...[
+          SizedBox(
+            height: 156,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _CashFlowPainter(
+                points: points,
+                incomeColor: colorScheme.primary,
+                expenseColor: colorScheme.outline,
+                projectedColor: colorScheme.primary.withValues(alpha: 0.35),
+                gridColor: colorScheme.outlineVariant,
+                labelStyle: textTheme.labelMedium!.copyWith(
+                  fontSize: 11,
+                  color: colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
           ),
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        Row(
-          children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: colorScheme.primary.withValues(alpha: 0.35),
-                borderRadius: AppRadius.borderXs,
-              ),
-            ),
-            const SizedBox(width: AppSpacing.xs + 2),
-            Expanded(
-              child: Text(
-                '*Des proyeksi AI: potensi penurunan proyek (${CurrencyFormatter.formatCompactIdr(8900000)})',
-                style: textTheme.bodySmall,
-              ),
+          if (projected != null) ...[
+            const SizedBox(height: AppSpacing.sm),
+            Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: colorScheme.primary.withValues(alpha: 0.35),
+                    borderRadius: AppRadius.borderXs,
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.xs + 2),
+                Expanded(
+                  child: Text(
+                    '${projected.monthLabel} proyeksi AI: estimasi pemasukan ${CurrencyFormatter.formatCompactIdr(projected.income)}',
+                    style: textTheme.bodySmall,
+                  ),
+                ),
+              ],
             ),
           ],
-        ),
+        ],
       ],
     );
   }
@@ -143,7 +165,6 @@ class _CashFlowPainter extends CustomPainter {
       (max, p) => math.max(max, math.max(p.income, p.expense)),
     );
 
-    // Subtle 3 horizontal hairlines
     final gridPaint = Paint()
       ..color = gridColor
       ..strokeWidth = 1;
@@ -164,39 +185,42 @@ class _CashFlowPainter extends CustomPainter {
       final incomeHeight = (point.income / maxVal) * chartHeight;
       final expenseHeight = (point.expense / maxVal) * chartHeight;
 
-      final incomeRect = RRect.fromRectAndCorners(
-        Rect.fromLTWH(
-          centerX - barWidth - barGap / 2,
-          topPadding + chartHeight - incomeHeight,
-          barWidth,
-          incomeHeight,
-        ),
-        topLeft: const Radius.circular(3),
-        topRight: const Radius.circular(3),
-      );
+      if (incomeHeight > 0) {
+        final incomeRect = RRect.fromRectAndCorners(
+          Rect.fromLTWH(
+            centerX - barWidth - barGap / 2,
+            topPadding + chartHeight - incomeHeight,
+            barWidth,
+            incomeHeight,
+          ),
+          topLeft: const Radius.circular(3),
+          topRight: const Radius.circular(3),
+        );
+        canvas.drawRRect(
+          incomeRect,
+          Paint()..color = point.isProjectedLean ? projectedColor : incomeColor,
+        );
+      }
 
-      final expenseRect = RRect.fromRectAndCorners(
-        Rect.fromLTWH(
-          centerX + barGap / 2,
-          topPadding + chartHeight - expenseHeight,
-          barWidth,
-          expenseHeight,
-        ),
-        topLeft: const Radius.circular(3),
-        topRight: const Radius.circular(3),
-      );
-
-      canvas.drawRRect(
-        incomeRect,
-        Paint()..color = point.isProjectedLean ? projectedColor : incomeColor,
-      );
-      canvas.drawRRect(
-        expenseRect,
-        Paint()
-          ..color = point.isProjectedLean
-              ? expenseColor.withValues(alpha: 0.45)
-              : expenseColor,
-      );
+      if (expenseHeight > 0) {
+        final expenseRect = RRect.fromRectAndCorners(
+          Rect.fromLTWH(
+            centerX + barGap / 2,
+            topPadding + chartHeight - expenseHeight,
+            barWidth,
+            expenseHeight,
+          ),
+          topLeft: const Radius.circular(3),
+          topRight: const Radius.circular(3),
+        );
+        canvas.drawRRect(
+          expenseRect,
+          Paint()
+            ..color = point.isProjectedLean
+                ? expenseColor.withValues(alpha: 0.45)
+                : expenseColor,
+        );
+      }
 
       final textPainter = TextPainter(
         text: TextSpan(text: point.monthLabel, style: labelStyle),

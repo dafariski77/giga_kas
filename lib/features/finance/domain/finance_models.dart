@@ -1,14 +1,49 @@
 enum TransactionType { income, expense }
 
+/// Categories aligned 1:1 with `gigakas_receipt_pipeline.onnx` output labels.
 enum ExpenseCategory {
-  operational('Operasional'),
-  connectivity('Internet & Software'),
-  clientMeeting('Meeting Klien'),
-  equipment('Peralatan Kerja'),
+  internetSoftware('Internet & Software'),
+  clientMeeting('Client Meeting & F&B'),
+  transport('Transportasi & Perjalanan'),
+  equipment('Peralatan Kerja & ATK'),
+  other('Lain-lain'),
   clientPayment('Pembayaran Klien');
 
   const ExpenseCategory(this.label);
   final String label;
+
+  static List<ExpenseCategory> get expenseOnly => const [
+        internetSoftware,
+        clientMeeting,
+        transport,
+        equipment,
+        other,
+      ];
+
+  static ExpenseCategory fromLabel(String raw) {
+    final normalized = raw.trim().toLowerCase();
+    for (final cat in ExpenseCategory.values) {
+      if (cat.label.toLowerCase() == normalized) return cat;
+    }
+    if (normalized.contains('internet') || normalized.contains('software')) {
+      return internetSoftware;
+    }
+    if (normalized.contains('meeting') ||
+        normalized.contains('f&b') ||
+        normalized.contains('kopi')) {
+      return clientMeeting;
+    }
+    if (normalized.contains('transport') || normalized.contains('perjalanan')) {
+      return transport;
+    }
+    if (normalized.contains('peralatan') || normalized.contains('atk')) {
+      return equipment;
+    }
+    if (normalized.contains('klien') || normalized.contains('income')) {
+      return clientPayment;
+    }
+    return other;
+  }
 }
 
 enum TaxScheme {
@@ -27,6 +62,14 @@ enum InvoiceStatus {
 
   const InvoiceStatus(this.label);
   final String label;
+
+  static InvoiceStatus fromStorage(String raw) {
+    return switch (raw) {
+      'paid' => InvoiceStatus.paid,
+      'overdue' => InvoiceStatus.overdue,
+      _ => InvoiceStatus.pending,
+    };
+  }
 }
 
 class TransactionItem {
@@ -38,33 +81,25 @@ class TransactionItem {
     required this.type,
     required this.category,
     required this.date,
+    this.taxAmount = 0,
+    this.emergencyAllocated = 0,
     this.isDeductibleBusinessExpense = false,
     this.isPendingSync = false,
+    this.rawOcrText,
   });
 
-  final String id;
+  final int id;
   final String title;
   final String subtitle;
   final int amount;
   final TransactionType type;
   final ExpenseCategory category;
   final DateTime date;
+  final int taxAmount;
+  final int emergencyAllocated;
   final bool isDeductibleBusinessExpense;
   final bool isPendingSync;
-
-  TransactionItem copyWith({bool? isPendingSync}) {
-    return TransactionItem(
-      id: id,
-      title: title,
-      subtitle: subtitle,
-      amount: amount,
-      type: type,
-      category: category,
-      date: date,
-      isDeductibleBusinessExpense: isDeductibleBusinessExpense,
-      isPendingSync: isPendingSync ?? this.isPendingSync,
-    );
-  }
+  final String? rawOcrText;
 }
 
 class MonthlyCashFlowPoint {
@@ -90,10 +125,10 @@ class InvoiceItem {
     required this.amount,
     required this.dueDate,
     required this.status,
-    this.clientPhone = '+62 812-3456-7890',
+    this.clientPhone = '',
   });
 
-  final String id;
+  final int id;
   final String invoiceNumber;
   final String clientName;
   final String projectTitle;
@@ -101,47 +136,106 @@ class InvoiceItem {
   final DateTime dueDate;
   final InvoiceStatus status;
   final String clientPhone;
+}
 
-  InvoiceItem copyWith({InvoiceStatus? status}) {
-    return InvoiceItem(
-      id: id,
-      invoiceNumber: invoiceNumber,
-      clientName: clientName,
-      projectTitle: projectTitle,
-      amount: amount,
-      dueDate: dueDate,
-      status: status ?? this.status,
-      clientPhone: clientPhone,
-    );
-  }
+class MerchantOverrideItem {
+  const MerchantOverrideItem({
+    required this.id,
+    required this.normalizedMerchant,
+    required this.correctedCategory,
+    required this.updatedAt,
+  });
+
+  final int id;
+  final String normalizedMerchant;
+  final String correctedCategory;
+  final DateTime updatedAt;
+}
+
+class IncomeForecast {
+  const IncomeForecast({
+    required this.predictedAmount,
+    required this.nextMonthLabel,
+    required this.averageRecentIncome,
+    required this.recommendedLockPercent,
+    required this.recommendedLockAmount,
+    required this.isLeanMonthRisk,
+    required this.usedOnnxModel,
+    required this.usedColdStartFallback,
+    required this.activeClients,
+    required this.incomeCv,
+  });
+
+  final int predictedAmount;
+  final String nextMonthLabel;
+  final int averageRecentIncome;
+  final int recommendedLockPercent;
+  final int recommendedLockAmount;
+  final bool isLeanMonthRisk;
+  final bool usedOnnxModel;
+  final bool usedColdStartFallback;
+  final int activeClients;
+  final double incomeCv;
+
+  double get deltaPercent => averageRecentIncome > 0
+      ? ((predictedAmount - averageRecentIncome) / averageRecentIncome) * 100
+      : 0;
 }
 
 class FinanceState {
   const FinanceState({
+    required this.isLoading,
     required this.transactions,
     required this.monthlyHistory,
     required this.invoices,
+    required this.merchantOverrides,
     required this.taxScheme,
+    required this.emergencyVaultId,
+    required this.emergencyLockedAmount,
     required this.emergencyTargetAmount,
     required this.emergencyLockedPercent,
-    required this.recommendedEmergencyPercent,
-    required this.isOfflineMode,
     required this.biometricEnabled,
     required this.isProMember,
     required this.freeScansRemaining,
+    required this.onnxReady,
+    this.incomeForecast,
   });
 
+  factory FinanceState.initial() => const FinanceState(
+        isLoading: true,
+        transactions: [],
+        monthlyHistory: [],
+        invoices: [],
+        merchantOverrides: [],
+        taxScheme: TaxScheme.pphFinal,
+        emergencyVaultId: 1,
+        emergencyLockedAmount: 0,
+        emergencyTargetAmount: 0,
+        emergencyLockedPercent: 15,
+        biometricEnabled: true,
+        isProMember: false,
+        freeScansRemaining: 5,
+        onnxReady: false,
+      );
+
+  final bool isLoading;
   final List<TransactionItem> transactions;
   final List<MonthlyCashFlowPoint> monthlyHistory;
   final List<InvoiceItem> invoices;
+  final List<MerchantOverrideItem> merchantOverrides;
   final TaxScheme taxScheme;
+  final int emergencyVaultId;
+  final int emergencyLockedAmount;
   final int emergencyTargetAmount;
   final int emergencyLockedPercent;
-  final int recommendedEmergencyPercent;
-  final bool isOfflineMode;
   final bool biometricEnabled;
   final bool isProMember;
   final int freeScansRemaining;
+  final bool onnxReady;
+  final IncomeForecast? incomeForecast;
+
+  int get recommendedEmergencyPercent =>
+      incomeForecast?.recommendedLockPercent ?? 20;
 
   int get totalIncome => transactions
       .where((t) => t.type == TransactionType.income)
@@ -153,7 +247,8 @@ class FinanceState {
 
   int get deductibleExpenses => transactions
       .where(
-        (t) => t.type == TransactionType.expense && t.isDeductibleBusinessExpense,
+        (t) =>
+            t.type == TransactionType.expense && t.isDeductibleBusinessExpense,
       )
       .fold(0, (sum, t) => sum + t.amount);
 
@@ -161,43 +256,49 @@ class FinanceState {
 
   int get taxVaultAmount => (totalIncome * taxScheme.rate).round();
 
-  int get emergencyVaultAmount =>
-      ((netBalance > 0 ? netBalance : 0) * (emergencyLockedPercent / 100)).round();
+  int get emergencyVaultAmount => emergencyLockedAmount;
 
-  int get spendableCash =>
-      (netBalance - taxVaultAmount - emergencyVaultAmount).clamp(0, netBalance);
-
-  int get pendingSyncCount =>
-      transactions.where((t) => t.isPendingSync).length;
+  int get spendableCash => (netBalance - taxVaultAmount - emergencyVaultAmount)
+      .clamp(0, netBalance > 0 ? netBalance : 0);
 
   FinanceState copyWith({
+    bool? isLoading,
     List<TransactionItem>? transactions,
     List<MonthlyCashFlowPoint>? monthlyHistory,
     List<InvoiceItem>? invoices,
+    List<MerchantOverrideItem>? merchantOverrides,
     TaxScheme? taxScheme,
+    int? emergencyVaultId,
+    int? emergencyLockedAmount,
     int? emergencyTargetAmount,
     int? emergencyLockedPercent,
-    int? recommendedEmergencyPercent,
-    bool? isOfflineMode,
     bool? biometricEnabled,
     bool? isProMember,
     int? freeScansRemaining,
+    bool? onnxReady,
+    IncomeForecast? incomeForecast,
+    bool clearForecast = false,
   }) {
     return FinanceState(
+      isLoading: isLoading ?? this.isLoading,
       transactions: transactions ?? this.transactions,
       monthlyHistory: monthlyHistory ?? this.monthlyHistory,
       invoices: invoices ?? this.invoices,
+      merchantOverrides: merchantOverrides ?? this.merchantOverrides,
       taxScheme: taxScheme ?? this.taxScheme,
+      emergencyVaultId: emergencyVaultId ?? this.emergencyVaultId,
+      emergencyLockedAmount:
+          emergencyLockedAmount ?? this.emergencyLockedAmount,
       emergencyTargetAmount:
           emergencyTargetAmount ?? this.emergencyTargetAmount,
       emergencyLockedPercent:
           emergencyLockedPercent ?? this.emergencyLockedPercent,
-      recommendedEmergencyPercent:
-          recommendedEmergencyPercent ?? this.recommendedEmergencyPercent,
-      isOfflineMode: isOfflineMode ?? this.isOfflineMode,
       biometricEnabled: biometricEnabled ?? this.biometricEnabled,
       isProMember: isProMember ?? this.isProMember,
       freeScansRemaining: freeScansRemaining ?? this.freeScansRemaining,
+      onnxReady: onnxReady ?? this.onnxReady,
+      incomeForecast:
+          clearForecast ? null : (incomeForecast ?? this.incomeForecast),
     );
   }
 }

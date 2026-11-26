@@ -18,12 +18,7 @@ class HomePage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(financeProvider);
     final colorScheme = Theme.of(context).colorScheme;
-
-    final isOffline = state.isOfflineMode;
-    final pendingCount = state.pendingSyncCount;
-    final syncLabel = isOffline
-        ? (pendingCount > 0 ? 'Offline · $pendingCount antrean' : 'Mode Offline')
-        : 'Tersinkron';
+    final textTheme = Theme.of(context).textTheme;
 
     return Scaffold(
       appBar: AppBar(
@@ -32,13 +27,11 @@ class HomePage extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.only(right: AppSpacing.xs),
             child: StatusBadge(
-              label: syncLabel,
+              label: 'Offline Ready',
               showDot: true,
-              foregroundColor:
-                  isOffline ? AppColors.warning : colorScheme.primary,
-              backgroundColor: isOffline
-                  ? AppColors.warning.withValues(alpha: 0.12)
-                  : colorScheme.primaryContainer.withValues(alpha: 0.7),
+              foregroundColor: colorScheme.primary,
+              backgroundColor:
+                  colorScheme.primaryContainer.withValues(alpha: 0.7),
             ),
           ),
           IconButton(
@@ -48,61 +41,111 @@ class HomePage extends ConsumerWidget {
           ),
         ],
       ),
-      body: ListView(
-        padding: AppSpacing.screenPadding,
-        children: [
-          _BalanceSummaryCard(state: state),
-          const SizedBox(height: AppSpacing.lg),
-          _LeanMonthBanner(
-            state: state,
-            onLockRecommended: () {
-              ref
-                  .read(financeProvider.notifier)
-                  .applyRecommendedEmergencyPercent();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Alokasi Dana Darurat diperbarui ke ${state.recommendedEmergencyPercent}%.',
+      body: state.isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: () => ref.read(financeProvider.notifier).refreshAll(),
+              child: ListView(
+                padding: AppSpacing.screenPadding,
+                children: [
+                  _BalanceSummaryCard(
+                    state: state,
+                    onQuickRecord: () => _showQuickRecordSheet(context, ref),
+                    onScanReceipt: () => context.go(AppRoutes.scanner),
                   ),
-                ),
-              );
-            },
-            onOpenVault: () => context.go(AppRoutes.vault),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          Card(
-            child: Padding(
-              padding: AppSpacing.cardPadding,
-              child: CashFlowChart(points: state.monthlyHistory),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xl),
-          SectionHeader(
-            title: 'Aktivitas Terakhir',
-            actionLabel: '+ Catat Manual',
-            onActionTap: () => _showQuickRecordSheet(context, ref),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Card(
-            child: Column(
-              children: [
-                for (var i = 0; i < state.transactions.length; i++) ...[
-                  _TransactionRow(item: state.transactions[i]),
-                  if (i < state.transactions.length - 1) const Divider(),
+                  const SizedBox(height: AppSpacing.lg),
+                  _LeanMonthBanner(
+                    state: state,
+                    onRecordIncome: () => _showQuickRecordSheet(context, ref),
+                    onLockRecommended: () async {
+                      final rec = state.recommendedEmergencyPercent;
+                      await ref
+                          .read(financeProvider.notifier)
+                          .lockRecommendedToEmergencyVault();
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Alokasi Dana Darurat diperbarui ke $rec% & disimpan ke brankas lokal.',
+                          ),
+                        ),
+                      );
+                    },
+                    onOpenVault: () => context.go(AppRoutes.vault),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  Card(
+                    child: Padding(
+                      padding: AppSpacing.cardPadding,
+                      child: CashFlowChart(points: state.monthlyHistory),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.xl),
+                  SectionHeader(
+                    title: 'Aktivitas Terakhir',
+                    actionLabel: '+ Catat Kas',
+                    onActionTap: () => _showQuickRecordSheet(context, ref),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  if (state.transactions.isEmpty)
+                    Card(
+                      child: Padding(
+                        padding: AppSpacing.cardPadding,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Belum ada transaksi tercatat',
+                              style: textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              'Mulai catat pemasukan dari klien atau pindai struk pengeluaran bisnis pertamamu.',
+                              style: textTheme.bodySmall,
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                            FilledButton.icon(
+                              onPressed: () =>
+                                  _showQuickRecordSheet(context, ref),
+                              icon: const Icon(Icons.add_rounded, size: 18),
+                              label: const Text('Catat Transaksi Pertama'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  else
+                    Card(
+                      child: Column(
+                        children: [
+                          for (var i = 0;
+                              i < state.transactions.take(8).length;
+                              i++) ...[
+                            _TransactionRow(item: state.transactions[i]),
+                            if (i < state.transactions.take(8).length - 1)
+                              const Divider(),
+                          ],
+                        ],
+                      ),
+                    ),
+                  const SizedBox(height: AppSpacing.xl),
                 ],
-              ],
+              ),
             ),
-          ),
-          const SizedBox(height: AppSpacing.xl),
-        ],
-      ),
     );
   }
 
-  Future<void> _showQuickRecordSheet(BuildContext context, WidgetRef ref) async {
+  Future<void> _showQuickRecordSheet(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final financeState = ref.read(financeProvider);
     final titleController = TextEditingController();
     final amountController = TextEditingController();
     var selectedType = TransactionType.income;
+    var selectedCategory = ExpenseCategory.internetSoftware;
+    var selectedTaxScheme = financeState.taxScheme;
+    var parsedAmount = 0;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -110,6 +153,15 @@ class HomePage extends ConsumerWidget {
       builder: (sheetContext) {
         return StatefulBuilder(
           builder: (context, setModalState) {
+            final textTheme = Theme.of(context).textTheme;
+            final colorScheme = Theme.of(context).colorScheme;
+            final taxSplit = (parsedAmount * selectedTaxScheme.rate).round();
+            final emergencySplit = (parsedAmount *
+                    (financeState.emergencyLockedPercent / 100.0))
+                .round();
+            final spendableSplit = (parsedAmount - taxSplit - emergencySplit)
+                .clamp(0, parsedAmount);
+
             return Padding(
               padding: EdgeInsets.only(
                 left: AppSpacing.lg,
@@ -117,80 +169,173 @@ class HomePage extends ConsumerWidget {
                 top: AppSpacing.xl,
                 bottom: MediaQuery.of(context).viewInsets.bottom + AppSpacing.xl,
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Catat Transaksi',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: AppSpacing.md),
-                  SegmentedButton<TransactionType>(
-                    segments: const [
-                      ButtonSegment(
-                        value: TransactionType.income,
-                        label: Text('Pemasukan'),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Catat Transaksi', style: textTheme.titleLarge),
+                    const SizedBox(height: AppSpacing.md),
+                    SegmentedButton<TransactionType>(
+                      segments: const [
+                        ButtonSegment(
+                          value: TransactionType.income,
+                          label: Text('Pemasukan'),
+                        ),
+                        ButtonSegment(
+                          value: TransactionType.expense,
+                          label: Text('Pengeluaran'),
+                        ),
+                      ],
+                      selected: {selectedType},
+                      onSelectionChanged: (value) {
+                        setModalState(() => selectedType = value.first);
+                      },
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    TextField(
+                      controller: titleController,
+                      decoration: InputDecoration(
+                        labelText: selectedType == TransactionType.income
+                            ? 'Nama Klien / Sumber'
+                            : 'Merchant / Keperluan',
                       ),
-                      ButtonSegment(
-                        value: TransactionType.expense,
-                        label: Text('Pengeluaran'),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    TextField(
+                      controller: amountController,
+                      keyboardType: TextInputType.number,
+                      onChanged: (value) {
+                        final n = int.tryParse(
+                              value.replaceAll(RegExp(r'[^0-9]'), ''),
+                            ) ??
+                            0;
+                        setModalState(() => parsedAmount = n);
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Nominal (Rp)',
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    if (selectedType == TransactionType.income) ...[
+                      Text(
+                        'Skema Pemisahan Pajak (Tax Vault)',
+                        style: textTheme.labelMedium,
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      SegmentedButton<TaxScheme>(
+                        segments: const [
+                          ButtonSegment(
+                            value: TaxScheme.pphFinal,
+                            label: Text('PPh Final 0,5%'),
+                          ),
+                          ButtonSegment(
+                            value: TaxScheme.pph21Norma,
+                            label: Text('PPh 21 Norma'),
+                          ),
+                        ],
+                        selected: {selectedTaxScheme},
+                        onSelectionChanged: (value) {
+                          setModalState(() => selectedTaxScheme = value.first);
+                        },
+                      ),
+                      if (parsedAmount > 0) ...[
+                        const SizedBox(height: AppSpacing.md),
+                        Container(
+                          padding: AppSpacing.compactPadding,
+                          decoration: BoxDecoration(
+                            color: colorScheme.surfaceContainer,
+                            borderRadius: AppRadius.borderSm,
+                          ),
+                          child: Column(
+                            children: [
+                              _SplitPreviewRow(
+                                label: 'Tax Vault (${selectedTaxScheme.label})',
+                                value: CurrencyFormatter.formatIdr(taxSplit),
+                                valueColor: colorScheme.tertiary,
+                              ),
+                              const SizedBox(height: AppSpacing.xs),
+                              _SplitPreviewRow(
+                                label:
+                                    'Dana Darurat (${financeState.emergencyLockedPercent}%)',
+                                value:
+                                    CurrencyFormatter.formatIdr(emergencySplit),
+                                valueColor: AppColors.warning,
+                              ),
+                              const SizedBox(height: AppSpacing.xs),
+                              _SplitPreviewRow(
+                                label: 'Dana Siap Pakai',
+                                value:
+                                    CurrencyFormatter.formatIdr(spendableSplit),
+                                valueColor: colorScheme.primary,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ] else ...[
+                      DropdownButtonFormField<ExpenseCategory>(
+                        initialValue: selectedCategory,
+                        decoration: const InputDecoration(
+                          labelText: 'Kategori Pengeluaran',
+                        ),
+                        items: ExpenseCategory.expenseOnly
+                            .map(
+                              (cat) => DropdownMenuItem(
+                                value: cat,
+                                child: Text(cat.label),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setModalState(() => selectedCategory = value);
+                          }
+                        },
                       ),
                     ],
-                    selected: {selectedType},
-                    onSelectionChanged: (value) {
-                      setModalState(() => selectedType = value.first);
-                    },
-                  ),
-                  const SizedBox(height: AppSpacing.md),
-                  TextField(
-                    controller: titleController,
-                    decoration: InputDecoration(
-                      labelText: selectedType == TransactionType.income
-                          ? 'Nama Klien / Sumber'
-                          : 'Keperluan Pengeluaran',
+                    const SizedBox(height: AppSpacing.lg),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: () async {
+                          final rawTitle = titleController.text.trim();
+                          final amount = int.tryParse(
+                            amountController.text
+                                .replaceAll(RegExp(r'[^0-9]'), ''),
+                          );
+                          if (rawTitle.isEmpty ||
+                              amount == null ||
+                              amount <= 0) {
+                            return;
+                          }
+                          final notifier = ref.read(financeProvider.notifier);
+                          if (selectedType == TransactionType.income) {
+                            notifier.setTaxScheme(selectedTaxScheme);
+                          }
+                          await notifier.addTransaction(
+                            title: rawTitle,
+                            subtitle: selectedType == TransactionType.income
+                                ? 'Pemasukan tercatat'
+                                : selectedCategory.label,
+                            amount: amount,
+                            type: selectedType,
+                            category: selectedType == TransactionType.income
+                                ? ExpenseCategory.clientPayment
+                                : selectedCategory,
+                            isDeductibleBusinessExpense:
+                                selectedType == TransactionType.expense,
+                            customTaxRate: selectedTaxScheme.rate,
+                          );
+                          if (sheetContext.mounted) {
+                            Navigator.of(sheetContext).pop();
+                          }
+                        },
+                        child: const Text('Simpan Transaksi'),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: AppSpacing.md),
-                  TextField(
-                    controller: amountController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Nominal (Rp)',
-                      hintText: 'Contoh: 2500000',
-                    ),
-                  ),
-                  const SizedBox(height: AppSpacing.lg),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: () {
-                        final rawTitle = titleController.text.trim();
-                        final amount = int.tryParse(
-                          amountController.text.replaceAll(RegExp(r'[^0-9]'), ''),
-                        );
-                        if (rawTitle.isEmpty || amount == null || amount <= 0) {
-                          return;
-                        }
-                        ref.read(financeProvider.notifier).addTransaction(
-                              title: rawTitle,
-                              subtitle: selectedType == TransactionType.income
-                                  ? 'Pemasukan tercatat manual'
-                                  : 'Pengeluaran operasional',
-                              amount: amount,
-                              type: selectedType,
-                              category: selectedType == TransactionType.income
-                                  ? ExpenseCategory.clientPayment
-                                  : ExpenseCategory.operational,
-                              isDeductibleBusinessExpense:
-                                  selectedType == TransactionType.expense,
-                            );
-                        Navigator.of(sheetContext).pop();
-                      },
-                      child: const Text('Simpan Transaksi'),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             );
           },
@@ -200,19 +345,60 @@ class HomePage extends ConsumerWidget {
   }
 }
 
+class _SplitPreviewRow extends StatelessWidget {
+  const _SplitPreviewRow({
+    required this.label,
+    required this.value,
+    required this.valueColor,
+  });
+
+  final String label;
+  final String value;
+  final Color valueColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Flexible(child: Text(label, style: textTheme.bodySmall)),
+        const SizedBox(width: AppSpacing.sm),
+        Text(
+          value,
+          style: textTheme.labelLarge?.copyWith(
+            color: valueColor,
+            fontSize: 12,
+            fontFeatures: AppTypography.tabularFigures,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _BalanceSummaryCard extends StatelessWidget {
-  const _BalanceSummaryCard({required this.state});
+  const _BalanceSummaryCard({
+    required this.state,
+    required this.onQuickRecord,
+    required this.onScanReceipt,
+  });
 
   final FinanceState state;
+  final VoidCallback onQuickRecord;
+  final VoidCallback onScanReceipt;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
+    final hasPositiveNet = state.netBalance > 0;
 
-    final total = state.netBalance > 0 ? state.netBalance : 1;
-    final spendFlex = ((state.spendableCash / total) * 100).round().clamp(1, 100);
-    final taxFlex = ((state.taxVaultAmount / total) * 100).round().clamp(1, 100);
+    final total = hasPositiveNet ? state.netBalance : 1;
+    final spendFlex =
+        ((state.spendableCash / total) * 100).round().clamp(1, 100);
+    final taxFlex =
+        ((state.taxVaultAmount / total) * 100).round().clamp(1, 100);
     final emergencyFlex =
         ((state.emergencyVaultAmount / total) * 100).round().clamp(1, 100);
 
@@ -242,24 +428,26 @@ class _BalanceSummaryCard extends StatelessWidget {
               borderRadius: AppRadius.borderFull,
               child: SizedBox(
                 height: 8,
-                child: Row(
-                  children: [
-                    Expanded(
-                      flex: spendFlex,
-                      child: Container(color: colorScheme.primary),
-                    ),
-                    const SizedBox(width: 2),
-                    Expanded(
-                      flex: taxFlex,
-                      child: Container(color: colorScheme.tertiary),
-                    ),
-                    const SizedBox(width: 2),
-                    Expanded(
-                      flex: emergencyFlex,
-                      child: Container(color: AppColors.warning),
-                    ),
-                  ],
-                ),
+                child: hasPositiveNet
+                    ? Row(
+                        children: [
+                          Expanded(
+                            flex: spendFlex,
+                            child: Container(color: colorScheme.primary),
+                          ),
+                          const SizedBox(width: 2),
+                          Expanded(
+                            flex: taxFlex,
+                            child: Container(color: colorScheme.tertiary),
+                          ),
+                          const SizedBox(width: 2),
+                          Expanded(
+                            flex: emergencyFlex,
+                            child: Container(color: AppColors.warning),
+                          ),
+                        ],
+                      )
+                    : Container(color: colorScheme.surfaceContainer),
               ),
             ),
             const SizedBox(height: AppSpacing.md),
@@ -269,14 +457,17 @@ class _BalanceSummaryCard extends StatelessWidget {
                   child: _AllocationMetric(
                     dotColor: colorScheme.primary,
                     label: 'Dana Bebas',
-                    value: CurrencyFormatter.formatCompactIdr(state.spendableCash),
+                    value:
+                        CurrencyFormatter.formatCompactIdr(state.spendableCash),
                   ),
                 ),
                 Expanded(
                   child: _AllocationMetric(
                     dotColor: colorScheme.tertiary,
                     label: 'Tax Vault',
-                    value: CurrencyFormatter.formatCompactIdr(state.taxVaultAmount),
+                    value: CurrencyFormatter.formatCompactIdr(
+                      state.taxVaultAmount,
+                    ),
                   ),
                 ),
                 Expanded(
@@ -286,6 +477,26 @@ class _BalanceSummaryCard extends StatelessWidget {
                     value: CurrencyFormatter.formatCompactIdr(
                       state.emergencyVaultAmount,
                     ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: onQuickRecord,
+                    icon: const Icon(Icons.add_rounded, size: 18),
+                    label: const Text('Catat Kas'),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onScanReceipt,
+                    icon: const Icon(Icons.document_scanner_outlined, size: 18),
+                    label: const Text('Scan Struk'),
                   ),
                 ),
               ],
@@ -319,7 +530,8 @@ class _AllocationMetric extends StatelessWidget {
             Container(
               width: 7,
               height: 7,
-              decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
+              decoration:
+                  BoxDecoration(color: dotColor, shape: BoxShape.circle),
             ),
             const SizedBox(width: AppSpacing.xs),
             Text(label, style: textTheme.bodySmall),
@@ -340,11 +552,13 @@ class _AllocationMetric extends StatelessWidget {
 class _LeanMonthBanner extends StatelessWidget {
   const _LeanMonthBanner({
     required this.state,
+    required this.onRecordIncome,
     required this.onLockRecommended,
     required this.onOpenVault,
   });
 
   final FinanceState state;
+  final VoidCallback onRecordIncome;
   final VoidCallback onLockRecommended;
   final VoidCallback onOpenVault;
 
@@ -352,11 +566,53 @@ class _LeanMonthBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final needsIncrease =
-        state.emergencyLockedPercent < state.recommendedEmergencyPercent;
+    final forecast = state.incomeForecast;
+
+    if (forecast == null) {
+      return Card(
+        child: Padding(
+          padding: AppSpacing.cardPadding,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('AI Prediktor Bulan Sepi', style: textTheme.titleSmall),
+                  StatusBadge(
+                    label: state.onnxReady ? 'ONNX Siap' : 'Siap Dipakai',
+                    foregroundColor: colorScheme.primary,
+                    backgroundColor:
+                        colorScheme.primaryContainer.withValues(alpha: 0.7),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'Catat pemasukan pertamamu agar model AI menghitung proyeksi arus kas bulan depan dan rekomendasi alokasi Dana Darurat.',
+                style: textTheme.bodySmall,
+              ),
+              const SizedBox(height: AppSpacing.md),
+              OutlinedButton.icon(
+                onPressed: onRecordIncome,
+                icon: const Icon(Icons.add_rounded, size: 16),
+                label: const Text('Catat Pemasukan'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final isLeanRisk = forecast.isLeanMonthRisk;
+    final nextMonth = forecast.nextMonthLabel;
+    final predictedText = CurrencyFormatter.formatIdr(forecast.predictedAmount);
+    final recPercent = state.recommendedEmergencyPercent;
+    final recAmount = forecast.recommendedLockAmount;
+    final needsIncrease = state.emergencyLockedPercent < recPercent;
 
     return Card(
-      color: needsIncrease
+      color: isLeanRisk
           ? AppColors.warning.withValues(alpha: 0.06)
           : colorScheme.primaryContainer.withValues(alpha: 0.35),
       child: Padding(
@@ -365,39 +621,62 @@ class _LeanMonthBanner extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Icon(
-                  needsIncrease
-                      ? Icons.trending_down_rounded
-                      : Icons.verified_outlined,
-                  size: 18,
-                  color: needsIncrease ? AppColors.warning : colorScheme.primary,
+                Expanded(
+                  child: Row(
+                    children: [
+                      Icon(
+                        isLeanRisk
+                            ? Icons.trending_down_rounded
+                            : Icons.verified_outlined,
+                        size: 18,
+                        color: isLeanRisk
+                            ? AppColors.warning
+                            : colorScheme.primary,
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      Flexible(
+                        child: Text(
+                          isLeanRisk
+                              ? 'Status Cash Flow $nextMonth: Waspada'
+                              : 'Status Cash Flow $nextMonth: Stabil',
+                          style: textTheme.titleSmall,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(width: AppSpacing.sm),
-                Text(
-                  needsIncrease
-                      ? 'Prediksi Bulan Sepi: Desember'
-                      : 'Dana Darurat Terjaga',
-                  style: textTheme.titleSmall,
+                StatusBadge(
+                  label: forecast.usedOnnxModel ? 'ONNX Offline' : 'Estimasi AI',
+                  foregroundColor: colorScheme.primary,
+                  backgroundColor:
+                      colorScheme.primaryContainer.withValues(alpha: 0.7),
                 ),
               ],
             ),
             const SizedBox(height: AppSpacing.xs),
             Text(
-              needsIncrease
-                  ? 'Pemasukan Desember diprediksi turun ±40%. AI menyarankan mengunci ${state.recommendedEmergencyPercent}% kas masuk ke Kantong Dana Darurat.'
-                  : 'Alokasi ${state.emergencyLockedPercent}% sudah sesuai saran AI untuk menghadapi bulan sepi.',
+              'Proyeksi pemasukan $nextMonth: $predictedText. '
+              'Saran kunci $recPercent% (${CurrencyFormatter.formatCompactIdr(recAmount)}) ke Kantong Dana Darurat.',
               style: textTheme.bodySmall?.copyWith(
                 color: colorScheme.onSurface,
               ),
             ),
+            if (forecast.usedColdStartFallback) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'Mode Cold-Start aktif: menggunakan rata-rata riwayat awal hingga genap 3 bulan.',
+                style: textTheme.bodySmall,
+              ),
+            ],
             const SizedBox(height: AppSpacing.md),
             Row(
               children: [
-                if (needsIncrease) ...[
+                if (needsIncrease || isLeanRisk) ...[
                   FilledButton(
                     onPressed: onLockRecommended,
-                    child: Text('Kunci ${state.recommendedEmergencyPercent}%'),
+                    child: Text('Kunci $recPercent%'),
                   ),
                   const SizedBox(width: AppSpacing.sm),
                 ],
@@ -442,7 +721,8 @@ class _TransactionRow extends StatelessWidget {
             child: Icon(
               isIncome ? Icons.south_west_rounded : Icons.north_east_rounded,
               size: 18,
-              color: isIncome ? colorScheme.primary : colorScheme.onSurfaceVariant,
+              color:
+                  isIncome ? colorScheme.primary : colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(width: AppSpacing.md),
@@ -457,26 +737,11 @@ class _TransactionRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: AppSpacing.xxs),
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        '${item.subtitle} · ${CurrencyFormatter.formatShortDate(item.date)}',
-                        style: textTheme.bodySmall,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (item.isPendingSync) ...[
-                      const SizedBox(width: AppSpacing.xs),
-                      StatusBadge(
-                        label: 'Antrean Offline',
-                        foregroundColor: AppColors.warning,
-                        backgroundColor:
-                            AppColors.warning.withValues(alpha: 0.12),
-                      ),
-                    ],
-                  ],
+                Text(
+                  '${item.category.label} · ${CurrencyFormatter.formatShortDate(item.date)}',
+                  style: textTheme.bodySmall,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),

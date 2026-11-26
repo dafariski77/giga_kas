@@ -1,174 +1,366 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/database/app_database.dart';
+import '../../../core/providers/core_providers.dart';
 import '../domain/finance_models.dart';
 
 class FinanceNotifier extends Notifier<FinanceState> {
+  static const _monthNames = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'Mei',
+    'Jun',
+    'Jul',
+    'Agu',
+    'Sep',
+    'Okt',
+    'Nov',
+    'Des',
+  ];
+
   @override
   FinanceState build() {
-    final now = DateTime(2026, 11, 26);
+    Future.microtask(refreshAll);
+    return FinanceState.initial();
+  }
 
-    return FinanceState(
-      taxScheme: TaxScheme.pphFinal,
-      emergencyTargetAmount: 18000000,
-      emergencyLockedPercent: 15,
-      recommendedEmergencyPercent: 20,
-      isOfflineMode: false,
-      biometricEnabled: true,
-      isProMember: false,
-      freeScansRemaining: 4,
-      monthlyHistory: const [
-        MonthlyCashFlowPoint(monthLabel: 'Jul', income: 14500000, expense: 6200000),
-        MonthlyCashFlowPoint(monthLabel: 'Agu', income: 18200000, expense: 7100000),
-        MonthlyCashFlowPoint(monthLabel: 'Sep', income: 11800000, expense: 5800000),
-        MonthlyCashFlowPoint(monthLabel: 'Okt', income: 16400000, expense: 6400000),
-        MonthlyCashFlowPoint(monthLabel: 'Nov', income: 21500000, expense: 5350000),
-        MonthlyCashFlowPoint(
-          monthLabel: 'Des*',
-          income: 8900000,
-          expense: 6000000,
-          isProjectedLean: true,
-        ),
-      ],
-      transactions: [
-        TransactionItem(
-          id: 'tx-1',
-          title: 'PT Aksara Digital',
-          subtitle: 'Retainer UI/UX November',
-          amount: 14500000,
-          type: TransactionType.income,
-          category: ExpenseCategory.clientPayment,
-          date: now.subtract(const Duration(days: 1)),
-        ),
-        TransactionItem(
-          id: 'tx-2',
-          title: 'Studio Kopi Ruang',
-          subtitle: 'Kopi meeting brief klien',
-          amount: 145000,
-          type: TransactionType.expense,
-          category: ExpenseCategory.clientMeeting,
-          date: now.subtract(const Duration(days: 2)),
-          isDeductibleBusinessExpense: true,
-        ),
-        TransactionItem(
-          id: 'tx-3',
-          title: 'Biznet Home Dedicated',
-          subtitle: 'Kuota & internet kerja',
-          amount: 450000,
-          type: TransactionType.expense,
-          category: ExpenseCategory.connectivity,
-          date: now.subtract(const Duration(days: 4)),
-          isDeductibleBusinessExpense: true,
-        ),
-        TransactionItem(
-          id: 'tx-4',
-          title: 'Kreasi Nusantara',
-          subtitle: 'Pelunasan landing page',
-          amount: 7000000,
-          type: TransactionType.income,
-          category: ExpenseCategory.clientPayment,
-          date: now.subtract(const Duration(days: 6)),
-        ),
-        TransactionItem(
-          id: 'tx-5',
-          title: 'Figma Professional',
-          subtitle: 'Langganan software bulanan',
-          amount: 240000,
-          type: TransactionType.expense,
-          category: ExpenseCategory.connectivity,
-          date: now.subtract(const Duration(days: 8)),
-          isDeductibleBusinessExpense: true,
-        ),
-      ],
-      invoices: [
-        InvoiceItem(
-          id: 'inv-1',
-          invoiceNumber: 'INV-2026-041',
-          clientName: 'Sinar Media Kreatif',
-          projectTitle: 'Desain Kampanye Q4',
-          amount: 6500000,
-          dueDate: now.subtract(const Duration(days: 3)),
-          status: InvoiceStatus.overdue,
-          clientPhone: '+62 811-2233-4455',
-        ),
-        InvoiceItem(
-          id: 'inv-2',
-          invoiceNumber: 'INV-2026-042',
-          clientName: 'Kopi Lokal ID',
-          projectTitle: 'Identitas Visual & Menu',
-          amount: 4200000,
-          dueDate: now.add(const Duration(days: 5)),
-          status: InvoiceStatus.pending,
-          clientPhone: '+62 813-9988-7766',
-        ),
-        InvoiceItem(
-          id: 'inv-3',
-          invoiceNumber: 'INV-2026-039',
-          clientName: 'PT Aksara Digital',
-          projectTitle: 'Retainer UI/UX November',
-          amount: 14500000,
-          dueDate: now.subtract(const Duration(days: 1)),
-          status: InvoiceStatus.paid,
-          clientPhone: '+62 812-7700-1122',
-        ),
-      ],
+  /// Reloads all tables from local SQLite and runs `gigakas_income_predictor.onnx`
+  /// whenever income history is available.
+  Future<void> refreshAll() async {
+    final db = ref.read(appDatabaseProvider);
+    final onnx = ref.read(onnxAiServiceProvider);
+
+    final txRows = await db.getAllTransactionsOrdered();
+    final vault = await db.getOrCreateEmergencyVault();
+    final overrideRows = await db.getAllMerchantOverrides();
+    final invoiceRows = await db.getAllInvoicesOrdered();
+    final features = await db.computeIncomePredictorFeatures();
+
+    final transactions = txRows
+        .map(
+          (row) => TransactionItem(
+            id: row.id,
+            title: row.merchantOrClient,
+            subtitle: row.subtitle.isNotEmpty ? row.subtitle : row.category,
+            amount: row.amount.round(),
+            type: row.type == 'INCOME'
+                ? TransactionType.income
+                : TransactionType.expense,
+            category: ExpenseCategory.fromLabel(row.category),
+            date: row.transactionDate,
+            taxAmount: row.taxAmount.round(),
+            emergencyAllocated: row.emergencyFundAllocated.round(),
+            isDeductibleBusinessExpense: row.isDeductibleBusinessExpense,
+            isPendingSync: row.isPendingSync,
+            rawOcrText: row.rawOcrText,
+          ),
+        )
+        .toList();
+
+    final overrides = overrideRows
+        .map(
+          (row) => MerchantOverrideItem(
+            id: row.id,
+            normalizedMerchant: row.normalizedMerchant,
+            correctedCategory: row.correctedCategory,
+            updatedAt: row.updatedAt,
+          ),
+        )
+        .toList();
+
+    final now = DateTime.now();
+    final invoices = invoiceRows.map((row) {
+      var status = InvoiceStatus.fromStorage(row.status);
+      if (status == InvoiceStatus.pending &&
+          row.dueDate.isBefore(DateTime(now.year, now.month, now.day))) {
+        status = InvoiceStatus.overdue;
+      }
+      return InvoiceItem(
+        id: row.id,
+        invoiceNumber: row.invoiceNumber,
+        clientName: row.clientName,
+        projectTitle: row.projectTitle,
+        amount: row.amount.round(),
+        dueDate: row.dueDate,
+        status: status,
+        clientPhone: row.clientPhone,
+      );
+    }).toList();
+
+    final forecast = features.hasIncomeHistory
+        ? await _runIncomeForecast(features)
+        : null;
+    final history = _buildMonthlyHistory(transactions, forecast);
+
+    state = state.copyWith(
+      isLoading: false,
+      transactions: transactions,
+      monthlyHistory: history,
+      invoices: invoices,
+      merchantOverrides: overrides,
+      emergencyVaultId: vault.id,
+      emergencyLockedAmount: vault.lockedAmount.round(),
+      emergencyTargetAmount: vault.targetAmount.round(),
+      emergencyLockedPercent: vault.allocationPercent,
+      onnxReady: onnx.isReady,
+      incomeForecast: forecast,
+      clearForecast: forecast == null,
     );
   }
 
-  void addTransaction({
+  Future<IncomeForecast> _runIncomeForecast(
+    IncomePredictorFeatures features,
+  ) async {
+    final onnx = ref.read(onnxAiServiceProvider);
+    final avgRecent = features.averageRecentIncome;
+    final nextMonthName = _monthNames[(features.nextMonth - 1).clamp(0, 11)];
+
+    double predicted;
+    bool usedOnnx = false;
+
+    try {
+      if (!onnx.isReady) {
+        await onnx.tryInitialize();
+      }
+      if (onnx.isReady) {
+        predicted = await onnx.predictNextMonthIncome(
+          incomeM1: features.incomeM1,
+          incomeM2: features.incomeM2,
+          incomeM3: features.incomeM3,
+          avgExpense3M: features.avgExpense3M,
+          activeClients: features.activeClients > 0 ? features.activeClients : 1,
+          nextMonth: features.nextMonth,
+          incomeCv: features.incomeCv,
+        );
+        usedOnnx = true;
+      } else {
+        predicted = _statisticalFallbackIncome(features);
+      }
+    } catch (_) {
+      predicted = _statisticalFallbackIncome(features);
+    }
+
+    final predictedInt = predicted.round();
+    final avgInt = avgRecent.round();
+    final isLeanRisk = avgInt > 0 && predictedInt < (avgInt * 0.85);
+    final recPercent =
+        isLeanRisk ? 25 : (features.incomeCv > 0.2 ? 20 : 15);
+    final recAmount = ((features.incomeM1 > 0 ? features.incomeM1 : avgRecent) *
+            (recPercent / 100.0))
+        .round();
+
+    return IncomeForecast(
+      predictedAmount: predictedInt,
+      nextMonthLabel: nextMonthName,
+      averageRecentIncome: avgInt,
+      recommendedLockPercent: recPercent,
+      recommendedLockAmount: recAmount,
+      isLeanMonthRisk: isLeanRisk,
+      usedOnnxModel: usedOnnx,
+      usedColdStartFallback: features.usedColdStartFallback,
+      activeClients: features.activeClients,
+      incomeCv: features.incomeCv,
+    );
+  }
+
+  double _statisticalFallbackIncome(IncomePredictorFeatures features) {
+    final avg = features.averageRecentIncome;
+    if (avg <= 0) return 0;
+    final volatilityDiscount = (features.incomeCv * 0.65).clamp(0.05, 0.35);
+    return avg * (1.0 - volatilityDiscount);
+  }
+
+  List<MonthlyCashFlowPoint> _buildMonthlyHistory(
+    List<TransactionItem> transactions,
+    IncomeForecast? forecast,
+  ) {
+    final now = DateTime.now();
+    final points = <MonthlyCashFlowPoint>[];
+
+    for (var offset = 4; offset >= 0; offset--) {
+      final monthDate = DateTime(now.year, now.month - offset, 1);
+      final monthIncome = transactions
+          .where(
+            (t) =>
+                t.type == TransactionType.income &&
+                t.date.year == monthDate.year &&
+                t.date.month == monthDate.month,
+          )
+          .fold<int>(0, (sum, t) => sum + t.amount);
+      final monthExpense = transactions
+          .where(
+            (t) =>
+                t.type == TransactionType.expense &&
+                t.date.year == monthDate.year &&
+                t.date.month == monthDate.month,
+          )
+          .fold<int>(0, (sum, t) => sum + t.amount);
+
+      points.add(
+        MonthlyCashFlowPoint(
+          monthLabel: _monthNames[monthDate.month - 1],
+          income: monthIncome,
+          expense: monthExpense,
+        ),
+      );
+    }
+
+    if (forecast != null) {
+      final nonZeroExp = points.where((p) => p.expense > 0).toList();
+      final avgExp = nonZeroExp.isEmpty
+          ? 0
+          : (nonZeroExp.fold<int>(0, (s, p) => s + p.expense) /
+                  nonZeroExp.length)
+              .round();
+
+      points.add(
+        MonthlyCashFlowPoint(
+          monthLabel: '${forecast.nextMonthLabel}*',
+          income: forecast.predictedAmount,
+          expense: avgExp,
+          isProjectedLean: true,
+        ),
+      );
+    }
+
+    return points;
+  }
+
+  /// Adds a transaction to local SQLite and updates EmergencyVault if income allocates savings.
+  Future<void> addTransaction({
     required String title,
     required String subtitle,
     required int amount,
     required TransactionType type,
     required ExpenseCategory category,
+    DateTime? date,
     bool isDeductibleBusinessExpense = false,
     bool consumeFreeScan = false,
-  }) {
-    final item = TransactionItem(
-      id: 'tx-${DateTime.now().microsecondsSinceEpoch}',
-      title: title,
-      subtitle: subtitle,
-      amount: amount,
-      type: type,
-      category: category,
-      date: DateTime(2026, 11, 26),
-      isDeductibleBusinessExpense: isDeductibleBusinessExpense,
-      isPendingSync: state.isOfflineMode,
+    String? rawOcrText,
+    double? customTaxRate,
+    int? customEmergencyPercent,
+  }) async {
+    final db = ref.read(appDatabaseProvider);
+    final isIncome = type == TransactionType.income;
+    final taxRate = customTaxRate ?? state.taxScheme.rate;
+    final emPercent = customEmergencyPercent ?? state.emergencyLockedPercent;
+
+    final taxAllocated = isIncome ? (amount * taxRate) : 0.0;
+    final emAllocated = isIncome ? (amount * (emPercent / 100.0)) : 0.0;
+
+    await db.insertTransactionEntry(
+      TransactionsCompanion.insert(
+        type: isIncome ? 'INCOME' : 'EXPENSE',
+        merchantOrClient: title.trim(),
+        subtitle: Value(subtitle.trim()),
+        category: category.label,
+        amount: amount.toDouble(),
+        taxAmount: Value(taxAllocated),
+        emergencyFundAllocated: Value(emAllocated),
+        isDeductibleBusinessExpense: Value(isDeductibleBusinessExpense),
+        transactionDate: date ?? DateTime.now(),
+        rawOcrText: Value(rawOcrText),
+      ),
     );
+
+    if (isIncome && emAllocated > 0) {
+      await db.updateEmergencyVault(
+        id: state.emergencyVaultId,
+        lockedAmount: state.emergencyLockedAmount + emAllocated,
+      );
+    }
 
     final nextFreeScans = consumeFreeScan && !state.isProMember
         ? (state.freeScansRemaining - 1).clamp(0, 99)
         : state.freeScansRemaining;
 
-    state = state.copyWith(
-      transactions: [item, ...state.transactions],
-      freeScansRemaining: nextFreeScans,
-    );
+    state = state.copyWith(freeScansRemaining: nextFreeScans);
+    await refreshAll();
   }
 
-  void applyRecommendedEmergencyPercent() {
-    state = state.copyWith(
-      emergencyLockedPercent: state.recommendedEmergencyPercent,
+  /// Saves a scanned receipt and records a MerchantOverride if the user corrected the AI category.
+  Future<bool> saveScannedReceipt({
+    required String merchant,
+    required int amount,
+    required DateTime date,
+    required ExpenseCategory selectedCategory,
+    required String? aiSuggestedCategory,
+    required bool isDeductible,
+    required String rawOcrText,
+  }) async {
+    final db = ref.read(appDatabaseProvider);
+    var savedOverride = false;
+
+    if (aiSuggestedCategory != null &&
+        selectedCategory.label.toLowerCase() !=
+            aiSuggestedCategory.trim().toLowerCase()) {
+      await db.saveMerchantOverride(merchant, selectedCategory.label);
+      savedOverride = true;
+    }
+
+    await addTransaction(
+      title: merchant,
+      subtitle: 'Scan Struk · ${selectedCategory.label}',
+      amount: amount,
+      type: TransactionType.expense,
+      category: selectedCategory,
+      date: date,
+      isDeductibleBusinessExpense: isDeductible,
+      consumeFreeScan: true,
+      rawOcrText: rawOcrText,
     );
+
+    return savedOverride;
   }
 
-  void setEmergencyPercent(int percent) {
-    state = state.copyWith(emergencyLockedPercent: percent.clamp(5, 40));
+  Future<void> lockRecommendedToEmergencyVault() async {
+    final db = ref.read(appDatabaseProvider);
+    final recPercent = state.recommendedEmergencyPercent;
+    final recDelta = state.incomeForecast?.recommendedLockAmount ?? 0;
+
+    await db.updateEmergencyVault(
+      id: state.emergencyVaultId,
+      allocationPercent: recPercent,
+      lockedAmount: (state.emergencyLockedAmount + recDelta).toDouble(),
+    );
+    await refreshAll();
+  }
+
+  Future<void> setEmergencyPercent(int percent) async {
+    final db = ref.read(appDatabaseProvider);
+    final clamped = percent.clamp(5, 40);
+    await db.updateEmergencyVault(
+      id: state.emergencyVaultId,
+      allocationPercent: clamped,
+    );
+    state = state.copyWith(emergencyLockedPercent: clamped);
+  }
+
+  Future<void> setEmergencyTargetAmount(int targetAmount) async {
+    if (targetAmount < 0) return;
+    final db = ref.read(appDatabaseProvider);
+    await db.updateEmergencyVault(
+      id: state.emergencyVaultId,
+      targetAmount: targetAmount.toDouble(),
+    );
+    await refreshAll();
+  }
+
+  Future<void> depositToEmergencyVault(int amount) async {
+    if (amount <= 0) return;
+    final db = ref.read(appDatabaseProvider);
+    await db.updateEmergencyVault(
+      id: state.emergencyVaultId,
+      lockedAmount: (state.emergencyLockedAmount + amount).toDouble(),
+    );
+    await refreshAll();
   }
 
   void setTaxScheme(TaxScheme scheme) {
     state = state.copyWith(taxScheme: scheme);
-  }
-
-  void toggleOfflineMode(bool offline) {
-    if (!offline) {
-      // Auto-sync pending transactions when returning online
-      final synced = state.transactions
-          .map((t) => t.isPendingSync ? t.copyWith(isPendingSync: false) : t)
-          .toList();
-      state = state.copyWith(isOfflineMode: false, transactions: synced);
-    } else {
-      state = state.copyWith(isOfflineMode: true);
-    }
   }
 
   void toggleBiometric(bool enabled) {
@@ -179,48 +371,52 @@ class FinanceNotifier extends Notifier<FinanceState> {
     state = state.copyWith(isProMember: true);
   }
 
-  void addInvoice({
+  Future<void> deleteMerchantOverride(int id) async {
+    final db = ref.read(appDatabaseProvider);
+    await db.deleteMerchantOverride(id);
+    await refreshAll();
+  }
+
+  Future<void> clearAllLocalData() async {
+    final db = ref.read(appDatabaseProvider);
+    await db.clearAllLocalData();
+    await refreshAll();
+  }
+
+  Future<void> addInvoice({
     required String clientName,
     required String projectTitle,
     required int amount,
     required DateTime dueDate,
-    String clientPhone = '+62 812-0000-1234',
-  }) {
-    final nextNum = 43 + state.invoices.length;
-    final invoice = InvoiceItem(
-      id: 'inv-${DateTime.now().microsecondsSinceEpoch}',
-      invoiceNumber: 'INV-2026-0$nextNum',
-      clientName: clientName,
-      projectTitle: projectTitle,
-      amount: amount,
-      dueDate: dueDate,
-      status: InvoiceStatus.pending,
-      clientPhone: clientPhone,
+    String clientPhone = '',
+  }) async {
+    final db = ref.read(appDatabaseProvider);
+    final year = DateTime.now().year;
+    final seq = (state.invoices.length + 1).toString().padLeft(3, '0');
+    await db.insertInvoiceEntry(
+      InvoicesCompanion.insert(
+        invoiceNumber: 'INV-$year-$seq',
+        clientName: clientName.trim(),
+        projectTitle: projectTitle.trim(),
+        amount: amount.toDouble(),
+        dueDate: dueDate,
+        status: 'pending',
+        clientPhone: Value(clientPhone.trim()),
+      ),
     );
-    state = state.copyWith(invoices: [invoice, ...state.invoices]);
+    await refreshAll();
   }
 
-  void markInvoicePaid(String invoiceId) {
-    InvoiceItem? target;
-    final updated = state.invoices.map((inv) {
-      if (inv.id == invoiceId) {
-        target = inv.copyWith(status: InvoiceStatus.paid);
-        return target!;
-      }
-      return inv;
-    }).toList();
-
-    state = state.copyWith(invoices: updated);
-
-    if (target != null) {
-      addTransaction(
-        title: target!.clientName,
-        subtitle: 'Pelunasan ${target!.invoiceNumber}',
-        amount: target!.amount,
-        type: TransactionType.income,
-        category: ExpenseCategory.clientPayment,
-      );
-    }
+  Future<void> markInvoicePaid(InvoiceItem invoice) async {
+    final db = ref.read(appDatabaseProvider);
+    await db.updateInvoiceStatus(invoice.id, 'paid');
+    await addTransaction(
+      title: invoice.clientName,
+      subtitle: 'Pelunasan ${invoice.invoiceNumber}',
+      amount: invoice.amount,
+      type: TransactionType.income,
+      category: ExpenseCategory.clientPayment,
+    );
   }
 }
 

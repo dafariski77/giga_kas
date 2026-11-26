@@ -16,7 +16,7 @@ class _CreateInvoicePageState extends ConsumerState<CreateInvoicePage> {
   final _clientController = TextEditingController();
   final _projectController = TextEditingController();
   final _amountController = TextEditingController();
-  final _phoneController = TextEditingController(text: '+62 812-');
+  final _phoneController = TextEditingController();
   int _dueDays = 7;
 
   @override
@@ -28,7 +28,7 @@ class _CreateInvoicePageState extends ConsumerState<CreateInvoicePage> {
     super.dispose();
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     final client = _clientController.text.trim();
     final project = _projectController.text.trim();
     final amount = int.tryParse(
@@ -37,19 +37,22 @@ class _CreateInvoicePageState extends ConsumerState<CreateInvoicePage> {
 
     if (client.isEmpty || project.isEmpty || amount == null || amount <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Lengkapi nama klien, proyek, dan nominal.')),
+        const SnackBar(
+            content: Text('Lengkapi nama klien, proyek, dan nominal.')),
       );
       return;
     }
 
-    ref.read(financeProvider.notifier).addInvoice(
+    await ref.read(financeProvider.notifier).addInvoice(
           clientName: client,
           projectTitle: project,
           amount: amount,
-          dueDate: DateTime(2026, 11, 26).add(Duration(days: _dueDays)),
+          dueDate: DateTime.now().add(Duration(days: _dueDays)),
           clientPhone: _phoneController.text.trim(),
         );
-    context.pop();
+    if (mounted) {
+      context.pop();
+    }
   }
 
   @override
@@ -95,7 +98,8 @@ class _CreateInvoicePageState extends ConsumerState<CreateInvoicePage> {
                     controller: _phoneController,
                     keyboardType: TextInputType.phone,
                     decoration: const InputDecoration(
-                      labelText: 'Nomor WhatsApp Klien',
+                      labelText: 'Nomor WhatsApp Klien (Opsional)',
+                      hintText: '+62 812-xxxx-xxxx',
                     ),
                   ),
                   const SizedBox(height: AppSpacing.lg),
